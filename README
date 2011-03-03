@@ -1,7 +1,14 @@
 AWSS3cURL
 
-This application demonstrates how to upload files to Amazon S3 with cURL from an Adobe AIR application and the AIR 2 NativeProcess API.  This application uses the AIR 2.0 or higher SDK, Flash Builder 4, and the cURL native application for uploading files. 
+This application demonstrates how to upload files to Amazon S3 (part of Amazon Web Services) with cURL from an Adobe AIR application and the AIR 2 NativeProcess API.  This application uses the AIR 2.0 or higher SDK, Flash Builder 4, and the cURL native application for uploading files. 
 
 MIT License: http://www.opensource.org/licenses/mit-license.php
 
-To use this application also depends on the as3corelib, as3awss3lib, and as3crypto libraries. 
+To use this application also depends on the as3corelib, as3awss3lib, and as3crypto libraries.  You will also need an Amazon S3 developer account and have cURL installed on your system.   Please refer to the following sites for more information:
+
+
+cURL: http://curl.haxx.se/
+Amazon S3: http://aws.amazon.com/about-aws/
+as3corelib: https://github.com/mikechambers/as3corelib
+as3awss3lib: http://code.google.com/p/as3awss3lib/
+as3crypto: http://code.google.com/p/as3crypto/

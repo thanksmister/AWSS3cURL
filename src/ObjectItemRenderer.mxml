@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:ItemRenderer xmlns:fx="http://ns.adobe.com/mxml/2009" 
+				xmlns:s="library://ns.adobe.com/flex/spark" 
+				xmlns:mx="library://ns.adobe.com/flex/mx" 
+				autoDrawBackground="true">
+	<fx:Script>
+		<![CDATA[
+			import com.adobe.webapis.awss3.S3Object;
+			
+			
+			private function getName(data:Object):String
+			{
+				return S3Object(data).key
+			}
+		]]>
+	</fx:Script>
+	
+	<s:VGroup width="100%" height="100%" verticalAlign="middle" paddingLeft="10" paddingBottom="5" paddingTop="5">
+		
+		<s:Label text="{getName(data)}"/>
+		
+	</s:VGroup>
+	
+</s:ItemRenderer>

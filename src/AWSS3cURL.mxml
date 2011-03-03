@@ -1,0 +1,458 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009" 
+					   xmlns:s="library://ns.adobe.com/flex/spark" 
+					   xmlns:mx="library://ns.adobe.com/flex/mx" 
+					   width="640" height="480" showStatusBar="false" 
+					   creationComplete="windowedapplication_creationCompleteHandler(event)">
+	
+	<fx:Script>
+		<![CDATA[
+			import com.adobe.serialization.json.JSON;
+			import com.adobe.webapis.awss3.AWSS3;
+			import com.adobe.webapis.awss3.AWSS3Event;
+			import com.adobe.webapis.awss3.Bucket;
+			import com.adobe.webapis.awss3.S3Object;
+			import com.hurlant.crypto.hash.HMAC;
+			import com.hurlant.util.Base64;
+			
+			import mx.collections.ArrayCollection;
+			import mx.controls.Alert;
+			import mx.events.CloseEvent;
+			import mx.events.FlexEvent;
+			import mx.managers.PopUpManager;
+			
+			import spark.events.IndexChangeEvent;
+			
+			private var service:AWSS3;
+			private var accessKey:String; // you can hard code this value if you want
+			private var secretAccessKey:String; // you can hard code this value if you want
+			private var hmac:HMAC;
+			private var selectedBucket:Bucket;
+			private var process:NativeProcess;
+			private var percentComplete:Number; // only way we can check upload complete
+		
+			private static const AMAZON_ENDPOINT:String = "s3.amazonaws.com";
+			
+			protected function windowedapplication_creationCompleteHandler(event:FlexEvent):void
+			{
+				hmac = new HMAC(new com.hurlant.crypto.hash.SHA1()); // used for signing uploads
+			
+				// if we hard code values we just use them
+				if(secretAccessKey && accessKey) {
+					initService();
+				}
+			}
+			
+			/**
+			 * You need to have your own access and secret key from an Amazon developer account.
+			 * */
+			protected function secretAccessKeyInput_enterHandler(event:FlexEvent):void
+			{
+				if(secretAccessKeyInput.text == "" || accessKeyInput.text == "") return;
+				
+				this.secretAccessKey = secretAccessKeyInput.text;
+				this.accessKey = accessKeyInput.text;
+				
+				initService();
+			}
+			
+			/**
+			 * Initialize our S3 service.
+			 * */
+			protected function initService():void
+			{
+				service = new AWSS3(this.accessKey, this.secretAccessKey);
+				service.addEventListener(IOErrorEvent.IO_ERROR, ioErrorHandler);
+				service.addEventListener(AWSS3Event.ERROR, onError);
+				
+				service.addEventListener(AWSS3Event.LIST_BUCKETS, onBucketResults);
+				service.addEventListener(AWSS3Event.LIST_OBJECTS, onObjectResutls);
+				service.addEventListener(AWSS3Event.BUCKET_CREATED, onBucketCreated);
+				service.addEventListener(AWSS3Event.BUCKET_DELETED, onBucketDeleted);
+				service.addEventListener(AWSS3Event.OBJECT_DELETED, onObjectDeleted);
+				service.addEventListener(AWSS3Event.OBJECT_SAVED, onObjectSaved);
+				service.addEventListener(AWSS3Event.REQUEST_FORBIDDEN, onRequestForbidden);
+				
+				service.listBuckets();
+			}
+			
+			/**
+			 * Change handler for selecting bucket list item.
+			 * */
+			protected function bucketList_changeHandler(event:IndexChangeEvent):void
+			{
+				selectedBucket = bucketList.selectedItem as Bucket;
+				
+				service.listObjects(selectedBucket.name);
+			}
+			
+// ------------- S3 service handlers ------------- //
+			
+			protected function onBucketResults(e:AWSS3Event):void
+			{
+				if (e.data && e.data is Array && (e.data as Array).length > 0) {
+					var arry:Array = e.data as Array;
+					bucketList.dataProvider = new ArrayCollection(arry);
+				}
+			}
+			
+			protected function onObjectSaved(e:AWSS3Event):void
+			{
+				service.listObjects(selectedBucket.name);
+			}
+			
+			protected function onObjectDeleted(e:AWSS3Event):void
+			{
+				service.listObjects(selectedBucket.name);
+			}			
+			
+			protected function onBucketCreated(e:AWSS3Event):void
+			{
+				service.listBuckets();
+			}
+			
+			protected function onBucketDeleted(e:AWSS3Event):void
+			{
+				service.listBuckets();
+			}
+			
+			protected function onObjectResutls(e:AWSS3Event):void
+			{
+				if (e.data && e.data is Array) {
+					var arry:Array = e.data as Array;
+					objectList.dataProvider = new ArrayCollection(arry);
+				}
+			}
+			
+			protected function onRequestForbidden(e:AWSS3Event):void
+			{
+				var msg:String = "";
+				if (e.data != null) {
+					msg = " Response: '" + e.data + "'";
+				}
+
+				Alert.show("Your access keys were not accepted by S3." + msg, "Authentication Error", Alert.OK, null);
+			}
+			
+			protected function onError(e:AWSS3Event):void
+			{
+				if (e.data != null)
+					Alert.show(String(e.data), "S3 Error", Alert.OK, null, null);
+				else
+					Alert.show("An unknown error has occurred.", "S3 Error", Alert.OK, null, null);
+			}
+			
+			protected function ioErrorHandler(e:IOErrorEvent):void
+			{
+				Alert.show("A network error occurred.  The error ID is: " + e.errorID, "Network Error", Alert.OK, null, null);				
+			}
+			
+			protected function securityErrorHandler(event:SecurityErrorEvent):void 
+			{
+				Alert.show("securityErrorHandler: " + event);
+			}
+			
+// ------------- user interaction handlers ------------- //
+
+			protected function newBucketButton_clickHandler(event:MouseEvent):void
+			{
+				PopUpManager.addPopUp(newNamePanel, this, true);
+				PopUpManager.centerPopUp(newNamePanel);
+				bucketNameInput.setFocus();
+			}
+			
+			protected function deleteBucketButton_clickHandler(event:MouseEvent):void
+			{
+				var bucket:Bucket = bucketList.selectedItem as Bucket;
+				service.deleteBucket(bucket.name);
+			}
+			
+			protected function uploadObjectButton_clickHandler(event:MouseEvent):void
+			{
+				var desktopDirectory:File = new File(File.desktopDirectory.nativePath);
+				
+				desktopDirectory.addEventListener(Event.SELECT, handleChooseFile);
+				desktopDirectory.browseForOpen("Choose file");
+			}
+			
+			protected function handleChooseFile(event:Event):void
+			{
+				var file:File = event.target as File;
+				saveFile(selectedBucket.name, file);
+			}
+			
+			/*
+			// we are not using the AWS service to upload file, we are using cURL
+			protected function handleChooseFile(event:Event):void
+			{
+				var file:File = event.target as File;
+				var mimeType:String = "application/octet-stream";
+				
+				service.saveObject(selectedBucket.name, file.name, mimeType, file);
+			}
+			*/
+			
+			protected function deleteObjectButton_clickHandler(event:MouseEvent):void
+			{
+				var object:S3Object = objectList.selectedItem as S3Object;
+				service.deleteObject(selectedBucket.name, object.key);
+			}
+			
+			/**
+			 * One restriction of S3 and uploading files is that bucket names should be lowercase.
+			 * We check for that and only allow creation of lowercase buckets. 
+			 * */
+			protected function bucketNameInput_enterHandler(event:FlexEvent):void
+			{
+				if(bucketNameInput.text != "") {
+					var bucketname:String = bucketNameInput.text;
+					if(bucketname.toLowerCase() != bucketname) {
+						Alert.show("Amazon restricts bucket names to lowercase. (best practices)", "S3 Error", Alert.OK, null, null);
+						return;
+					}
+					
+					service.createNewBucket(bucketNameInput.text);
+				}
+					
+				PopUpManager.removePopUp(newNamePanel);
+			}
+
+			protected function newNamePanel_closeHandler(event:CloseEvent):void
+			{
+				PopUpManager.removePopUp(newNamePanel);
+			}
+			
+// --------------- cURL upload service ------------------- //
+			
+			/**
+			 * Uploads a file to S3 using cURL using the AIR NativeProcess API.
+			 * 
+			 * @param file File object
+			 * */
+			protected function saveFile(folderid:String, file:File):void
+			{
+				createProgressPanel(); // add our progress bar
+				
+				var cURL:File = File.applicationDirectory;
+				
+				if (Capabilities.os.toLowerCase().indexOf("win") > -1) {
+					cURL = cURL.resolvePath("bin/curl.exe");
+				} else if (Capabilities.os.toLowerCase().indexOf("mac") > -1) {
+					cURL = cURL.resolvePath("/usr/bin/curl");
+				}
+				
+				var contentType:String = "multipart/form-data";
+				var arguments:Vector.<String> = getArguments("PUT", folderid, file, contentType);
+				
+				var nativeProcessStartupInfo:NativeProcessStartupInfo = new NativeProcessStartupInfo();
+					nativeProcessStartupInfo.arguments = arguments;
+					nativeProcessStartupInfo.executable = cURL;
+				
+				process = new NativeProcess();
+				process.addEventListener(ProgressEvent.STANDARD_INPUT_PROGRESS, onInputProgress);
+				process.addEventListener(ProgressEvent.STANDARD_OUTPUT_DATA, onStandardOutputData);
+				process.addEventListener(ProgressEvent.STANDARD_ERROR_DATA, onStandardErrorData);
+				process.addEventListener(NativeProcessExitEvent.EXIT, onStandardOutputExit);
+				
+				process.addEventListener(IOErrorEvent.STANDARD_OUTPUT_IO_ERROR, onOutputIOError);
+				process.addEventListener(IOErrorEvent.STANDARD_ERROR_IO_ERROR, onStandardIOError);
+				
+				process.start(nativeProcessStartupInfo);
+			}
+			
+			/**
+			 * Create the native process starupt info arguments. Be sure to check the cURL documentation
+			 * for more functions on upload: http://curl.haxx.se/docs/manual.html
+			 * 
+			 * @param method POST or GET arguements
+			 * @param bucketname The S3 bucket name for upload target
+			 * @param file File to upload
+			 * @param contentType The mime type for the upload
+			 * @param secure Boolean value for usting https or http
+			 * @return Vector.<String>
+			 * */
+			protected function getArguments(method:String, bucketname:String, file:File, contentType:String = "application/octet-stream", secure:Boolean = false):Vector.<String>
+			{
+				var protocol:String = (secure)? "https":"http";
+				var path:String = protocol + "://" + bucketname + "." + AMAZON_ENDPOINT
+				var policy:String = getPolicy(bucketname, contentType);
+				
+				var arguments:Vector.<String> = new Vector.<String>();
+					arguments.push("-#"); // gives us a ### % ouput for progress from cURL
+					arguments.push("-F key=" + file.name );
+					arguments.push("-F AWSAccessKeyId=" + this.accessKey );
+					arguments.push("-F policy=" + policy );
+					arguments.push("-F signature=" + getSignature( policy) );
+					arguments.push("-F Content-Type=" + contentType);
+					arguments.push("-F file=@" + file.nativePath);
+					arguments.push(path);
+				
+				return arguments;
+			}
+			
+			/**
+			 * Creates the policy file for the S3 upload.  For more information on AWS policy files:
+			 * http://aws.amazon.com/articles/1434. The paramater content-length-range restricts
+			 * the file upload size.  Remove it if you want to have no restrictions on upload size.
+			 * */
+			protected function getPolicy(bucketname:String, contentType:String):String
+			{
+				// date has to be some time in the future so uploads don't expire in progress
+				var obj:Object = {"expiration": "2015-06-15T12:00:00.000Z",
+					"conditions": [ 
+						{"bucket": bucketname},
+						["starts-with", "$key", ""],
+						["starts-with", "$Content-Type", ""],
+						["content-length-range", 0, 1048576] 
+					]
+				}
+				
+				var json:String = JSON.encode(obj);
+				var encoded: String = Base64.encode(json);
+				
+				return encoded;
+			}
+			
+			/**
+			 * Craete the signature for S3. For more information on S3 signatures:
+			 * http://aws.amazon.com/articles/1434
+			 * */
+			protected function getSignature(policy:String):String
+			{
+				var policyBytes:ByteArray = new ByteArray();
+					policyBytes.writeUTFBytes(policy);	
+				
+				var secretAccessKeyBytes:ByteArray = new ByteArray();
+					secretAccessKeyBytes.writeUTFBytes(this.secretAccessKey);
+				
+				var hmacBytes:ByteArray = hmac.compute(secretAccessKeyBytes, policyBytes);
+				
+				return Base64.encodeByteArray(hmacBytes);
+			}
+			
+			/**
+			 * Data output when error occurs in S3 service comes back as an XML document that we can parse.  
+			 * <?xml version="1.0" encoding="UTF-8"?>
+			 * <Error><Code>AccessDenied</Code><Message></Message><RequestId></RequestId><HostId></Error>
+			 * */
+			protected function onStandardOutputData(event:ProgressEvent):void
+			{
+				var output:String  = process.standardOutput.readUTFBytes(process.standardOutput.bytesAvailable);
+				
+				if (output.indexOf("Error") >= 0 ) {
+					removeProgressPanel();
+					var xml:XML = XML(output);
+					Alert.show("Error: " + xml..Message + "\nCode: " + xml..Code, "Error", Alert.OK, null, null);
+				} 
+			}
+			
+			protected function onInputProgress(event:ProgressEvent):void
+			{
+				trace("onInputProgress");
+				trace( process.standardOutput.readUTFBytes(process.standardOutput.bytesAvailable) );
+			}
+			
+			/**
+			 * Event fired when process exits and gives an exit code. 
+			 * */
+			protected function onStandardOutputExit(event:NativeProcessExitEvent):void
+			{
+				if(event.exitCode == 0 && percentComplete == 100) {
+					service.listObjects(selectedBucket.name);
+					removeProgressPanel();
+				}
+			}
+			
+			protected function createProgressPanel():void
+			{
+				PopUpManager.addPopUp(progressPanel, this, true);
+				PopUpManager.centerPopUp(progressPanel);
+			}
+			
+			protected function removeProgressPanel():void
+			{
+				if(progressPanel) {
+					percentComplete = 0;
+					progressBar.setProgress(0, progressBar.maximum);
+					PopUpManager.removePopUp(progressPanel)
+				}
+			}
+			
+			/**
+			 * Handles writing within the process such as percent complete. 
+			 * */
+			protected function onStandardErrorData(event:ProgressEvent):void
+			{
+				var output:String = ( process.standardError.readUTFBytes(process.standardError.bytesAvailable) );
+				var regex:RegExp =  /#{1,}\s+([0-9\.]+)/g;
+	
+				output.replace(regex, captureMatchPercent);
+			}
+			
+			protected function captureMatchPercent(matchedSubstring:String, capturedMatch1:String, index:int, str:String):String
+			{
+				var percent:Number = Math.round(Number(capturedMatch1)); // save percent complete
+				
+				if(percent < percentComplete) return str;
+				
+				percentComplete = percent;
+				
+				progressBar.setProgress(percentComplete, progressBar.maximum);
+				
+				return str;
+			}
+			
+			protected function onOutputIOError(event:IOErrorEvent):void
+			{
+				trace( "onOutputIOError: " + event.text );
+			}
+			
+			protected function onStandardIOError(event:IOErrorEvent):void
+			{
+				trace( "onStandardIOError: " + event.text );
+			}
+
+		]]>
+	</fx:Script>
+	
+	<fx:Declarations>
+		<s:TitleWindow id="newNamePanel" width="200" height="80" title="New Bucket Name" close="newNamePanel_closeHandler(event)">
+			<s:HGroup width="100%" paddingLeft="10" paddingRight="10" height="100%" verticalAlign="middle">
+				<s:TextInput id="bucketNameInput" width="100%" enter="bucketNameInput_enterHandler(event)"/>
+			</s:HGroup>
+		</s:TitleWindow>
+		
+		<s:Panel id="progressPanel" width="200" height="80" title="Upload Progress">
+			<s:HGroup width="100%" paddingLeft="10" paddingRight="10" height="100%" verticalAlign="middle">
+				<mx:ProgressBar id="progressBar" mode="manual" width="100%" maximum="100" minimum="0"/>
+			</s:HGroup>
+		</s:Panel>
+		
+	</fx:Declarations>
+	
+	<s:VGroup width="100%" height="100%" paddingBottom="10" paddingTop="10" paddingLeft="10" paddingRight="10">
+		
+		<s:HGroup horizontalAlign="center" gap="10" verticalAlign="middle" width="100%">
+			<s:Label text="AWS Key:"/>
+			<s:TextInput id="accessKeyInput" width="200"/>
+			<mx:Spacer width="20"/>
+			<s:Label text="AWS Secret Key:"/>
+			<s:TextInput id="secretAccessKeyInput" width="200" displayAsPassword="true" enter="secretAccessKeyInput_enterHandler(event)"/>
+		</s:HGroup>
+		
+		<s:HGroup width="100%" height="100%">
+			<s:List id="bucketList" width="100%" height="100%" change="bucketList_changeHandler(event)" itemRenderer="BucketItemRenderer"/>
+			<s:List id="objectList" width="100%" height="100%" itemRenderer="ObjectItemRenderer"/>
+		</s:HGroup>
+	
+		<s:HGroup width="100%" verticalAlign="middle" horizontalAlign="center" height="36" paddingLeft="10" paddingRight="10">
+			<s:Button id="newBucketButton" label="New Bucket" click="newBucketButton_clickHandler(event)" enabled="{bucketList.dataProvider != null}"/>
+			<s:Button id="deleteBucketButton" label="Delete Bucket" click="deleteBucketButton_clickHandler(event)" enabled="{bucketList.selectedIndex >= 0}"/>
+			<mx:Spacer width="100%"/>
+			<s:Button id="deleteObjectButton" label="Delete Object" click="deleteObjectButton_clickHandler(event)" enabled="{objectList.selectedIndex >= 0}"/>
+			<s:Button id="uploadButton" label="Upload Object" click="uploadObjectButton_clickHandler(event)" enabled="{bucketList.selectedIndex >= 0}"/>
+		</s:HGroup>
+		
+	</s:VGroup>
+	
+</s:WindowedApplication>

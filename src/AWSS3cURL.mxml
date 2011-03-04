@@ -24,12 +24,12 @@
 			import spark.events.IndexChangeEvent;
 			
 			private var service:AWSS3;
-			private var accessKey:String; // you can hard code this value if you want
-			private var secretAccessKey:String; // you can hard code this value if you want
+			private var accessKey:String = "1FZ9TYBXXMBK5T5ZT382"; // you can hard code this value if you want
+			private var secretAccessKey:String = "UQtJgEYfeLPr/ZPMJd5Rptf6HUOVmHcHG1rJcmiO"; // you can hard code this value if you want
 			private var hmac:HMAC;
 			private var selectedBucket:Bucket;
 			private var process:NativeProcess;
-			private var percentComplete:Number; // only way we can check upload complete
+			private var percentComplete:Number = 0; // only way we can check upload complete
 		
 			private static const AMAZON_ENDPOINT:String = "s3.amazonaws.com";
 			
@@ -384,22 +384,18 @@
 			protected function onStandardErrorData(event:ProgressEvent):void
 			{
 				var output:String = ( process.standardError.readUTFBytes(process.standardError.bytesAvailable) );
-				var regex:RegExp =  /#{1,}\s+([0-9\.]+)/g;
-	
-				output.replace(regex, captureMatchPercent);
-			}
-			
-			protected function captureMatchPercent(matchedSubstring:String, capturedMatch1:String, index:int, str:String):String
-			{
-				var percent:Number = Math.round(Number(capturedMatch1)); // save percent complete
+				var regex:RegExp =  /([0-9\.]+)/;
+				var exec:String = regex.exec(output);
 				
-				if(percent < percentComplete) return str;
-				
-				percentComplete = percent;
-				
-				progressBar.setProgress(percentComplete, progressBar.maximum);
-				
-				return str;
+				if(exec) {
+					var arry:Array = exec.split(",");
+					var percent:Number = Math.round(Number(arry[0])); // save percent complete
+					
+					if(percent > percentComplete) {
+						percentComplete = percent;
+						progressBar.setProgress(percentComplete, progressBar.maximum);
+					}
+				}
 			}
 			
 			protected function onOutputIOError(event:IOErrorEvent):void
